@@ -24,7 +24,7 @@ $LICENSE = "apache-2.0"
 $OUTPUT_DIR = "./dist"
 $QUANTIZE_BIN = "./build/bin/llama-quantize.exe"  # Or llama-quantize on WSL/Mac/Linux
 
-$COMMIT_MSG = "Add Q2–Q8_0 quantized models with per-model cards, MODELFILE, CLI examples, and auto-upload"
+$COMMIT_MSG = "Add quantized models with per-model cards, MODELFILE, CLI examples, and auto-upload"
 
 # -------------------------------
 # DERIVE INPUT & OUTPUT NAMES
