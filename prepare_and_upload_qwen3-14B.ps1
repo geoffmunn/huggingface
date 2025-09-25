@@ -280,4 +280,227 @@ foreach ($QTYPE in $QUANTS) {
     New-Item -ItemType Directory -Path $DIRNAME -ErrorAction SilentlyContinue | Out-Null
 
     $FILE_SIZE = (Get-Item $MODEL_FILE).Length
-    $UNIT = if ($FILE_SIZE -gt 1TB) { "TB"; $VAL
+    $UNIT = if ($FILE_SIZE -gt 1TB) { "TB"; $VAL = "{0:N2}" -f ($FILE_SIZE / 1TB) }
+            elseif ($FILE_SIZE -gt 1GB) { "GB"; $VAL = "{0:N2}" -f ($FILE_SIZE / 1GB) }
+            elseif ($FILE_SIZE -gt 1MB) { "MB"; $VAL = "{0:N2}" -f ($FILE_SIZE / 1MB) }
+            else { "KB"; $VAL = "{0:N2}" -f ($FILE_SIZE / 1KB) }
+    $DISPLAY_SIZE = "$VAL $UNIT"
+
+    $RAM = $RAM_ESTIMATES[$MODEL_NAME][$QTYPE]
+    $SPEED = if ($QTYPE -match "^Q[234]") { "⚡ Fast" } elseif ($QTYPE -match "^Q5") { "🐢 Medium" } else { "🐌 Slow" }
+    $QUAL = switch ($QTYPE) {
+        "Q2_K"   { "Minimal" }
+        "Q3_*"   { "Low-Medium" }
+        "Q4_*"   { "Practical" }
+        "Q5_*"   { "Max Reasoning" }
+        "Q6_K"   { "Near-FP16" }
+        "Q8_0"   { "Lossless*" }
+    }
+
+    # Dynamic prompt based on quant level
+    if ($QTYPE -in @("Q5_K_M", "Q6_K", "Q8_0")) {
+        $PROMPT = "Explain how photosynthesis converts sunlight into chemical energy in plants."
+        $TEMP = 0.5
+    } elseif ($QTYPE -in @("Q4_K_M", "Q5_K_S")) {
+        $PROMPT = "Write a haiku about autumn leaves falling gently in a quiet forest."
+        $TEMP = 0.7
+    } else {
+        $PROMPT = "Summarize what a neural network is in one sentence."
+        $TEMP = 0.3
+    }
+
+    $CARD = @"
+---
+license: apache-2.0
+tags:
+  - gguf
+  - qwen
+  - llama.cpp
+  - quantized
+  - text-generation
+  - chat
+$(if ($MODEL_NAME -notlike "*0.6B*") { '  - reasoning', '  - agent', '  - multilingual' })
+base_model: $BASE_REPO
+author: geoffmunn
+---
+
+# ${MODEL_NAME}-${QTYPE}
+
+Quantized version of [$BASE_REPO](https://huggingface.co/$BASE_REPO) at **$QTYPE** level, derived from **$INPUT_PRECISION** base weights.
+
+## Model Info
+
+- **Format**: GGUF (for llama.cpp and compatible runtimes)
+- **Size**: $DISPLAY_SIZE
+- **Precision**: $QTYPE
+- **Base Model**: [$BASE_REPO](https://huggingface.co/$BASE_REPO)
+- **Conversion Tool**: [llama.cpp](https://github.com/ggerganov/llama.cpp)
+
+## Quality & Performance
+
+| Metric | Value |
+|-------|-------|
+| **Quality** | $QUAL |
+| **Speed** | $SPEED |
+| **RAM Required** | $RAM |
+| **Recommendation** | $($RECOMMENDATIONS[$QTYPE]) |
+
+## Prompt Template (ChatML)
+
+This model uses the **ChatML** format used by Qwen:
+
+\`\`\`text
+<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+{prompt}<|im_end|>
+<|im_start|>assistant
+\`\`\`
+
+Set this in your app (LM Studio, OpenWebUI, etc.) for best results.
+
+## Generation Parameters
+
+Recommended defaults:
+
+| Parameter | Value |
+|---------|-------|
+| Temperature | 0.6 |
+| Top-P | 0.95 |
+| Top-K | 20 |
+| Min-P | 0.0 |
+| Repeat Penalty | 1.1 |
+
+Stop sequences: \`<|im_end|>\`, \`<|im_start|>\`
+
+## 🖥️ CLI Example Using Ollama or TGI Server
+
+Here’s how you can query this model via API using \`curl\` and \`jq\`. Replace the endpoint with your local server.
+
+\`\`\`bash
+curl http://localhost:11434/api/generate -s -N -d '{
+  "model": "hf.co/geoffmunn/$MODEL_NAME:${QTYPE}",
+  "prompt": "Respond exactly as follows: $PROMPT",
+  "temperature": $TEMP,
+  "top_p": 0.95,
+  "top_k": 20,
+  "min_p": 0.0,
+  "repeat_penalty": 1.1,
+  "stream": false
+}' | jq -r '.response'
+\`\`\`
+
+🎯 **Why this works well**:
+- The prompt is meaningful and achievable for this model size.
+- Temperature tuned appropriately: lower for factual (\`0.5\`), higher for creative (\`0.7\`).
+- Uses \`jq\` to extract clean output.
+
+## Verification
+
+Check integrity:
+
+\`\`\`bash
+certutil -hashfile '${MODEL_NAME}-${INPUT_PRECISION}:$QTYPE.gguf' SHA256
+# Compare with values in SHA256SUMS.txt
+\`\`\`
+
+## Usage
+
+Compatible with:
+- [LM Studio](https://lmstudio.ai) – local AI model runner
+- [OpenWebUI](https://openwebui.com) – self-hosted AI interface
+- [GPT4All](https://gpt4all.io) – private, offline AI chatbot
+- Directly via \`llama.cpp\`
+
+## License
+
+Apache 2.0 – see base model for full terms.
+"@
+
+    $CARD | Out-File -FilePath "$DIRNAME/README.md" -Encoding UTF8
+    Write-Host "✅ Generated per-model card: $DIRNAME/README.md" -ForegroundColor Green
+}
+
+
+# -------------------------------
+# STEP 5: Generate Shared MODELFILE
+# -------------------------------
+
+$MODELFILE_CONTENT = @"
+# MODELFILE for $($MODEL_NAME)-GGUF
+# Used by LM Studio, OpenWebUI, GPT4All, etc.
+
+context_length: 32768
+embedding: false
+f16: cpu
+
+# Chat template using ChatML (used by Qwen)
+prompt_template: >-
+         <|im_start|>system
+       You are a helpful assistant.<|im_end|>
+         <|im_start|>user
+       {prompt}<|im_end|>
+         <|im_start|>assistant
+
+# Stop sequences help end generation cleanly
+stop: "<|im_end|>"
+stop: "<|im_start|>"
+
+# Default sampling
+temperature: 0.6
+top_p: 0.95
+top_k: 20
+min_p: 0.0
+repeat_penalty: 1.1
+"@
+
+$MODELFILE_CONTENT | Out-File -FilePath "MODELFILE" -Encoding UTF8
+Write-Host "✅ Shared MODELFILE generated!" -ForegroundColor Green
+
+
+# -------------------------------
+# STEP 6a: Ensure HF Repo Exists
+# -------------------------------
+
+Write-Host "🔍 Ensuring Hugging Face repo exists: $HF_REPO" -ForegroundColor Cyan
+
+if (-not (Get-Command huggingface-cli -ErrorAction SilentlyContinue)) {
+    Write-Host "📦 Installing huggingface_hub..." -ForegroundColor Yellow
+    pip install huggingface_hub --quiet
+}
+
+python -c "
+from huggingface_hub import create_repo
+repo_id = '$HF_REPO'
+try:
+    create_repo(repo_id, repo_type='model', private=False, exist_ok=True)
+    print(f'✅ Repository {repo_id} is ready.')
+except Exception as e:
+    print(f'❌ Failed to create repo: {e}')
+    exit(1)
+"
+
+
+# -------------------------------
+# STEP 6b: Upload to Hugging Face
+# -------------------------------
+
+Write-Host "📤 Final files to upload:" -ForegroundColor Cyan
+Get-ChildItem *.gguf, README.md, MODELFILE, SHA256SUMS.txt | Select-Object Name, Length | Format-Table
+
+$reply = Read-Host "👉 Continue with upload? [Y/n]"
+if ($reply -match '^[Nn]$') {
+    Write-Host "⏭️ Skipped upload. Files ready in $OUTPUT_DIR" -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host "🚀 Uploading all files to $HF_REPO_URL" -ForegroundColor Green
+hf upload `
+  "$HF_REPO" `
+  . `
+  --repo-type=model `
+  --commit-message "$COMMIT_MSG"
+
+Write-Host ""
+Write-Host "🎉 Success! Your model has been uploaded." -ForegroundColor Green
+Write-Host "🌐 View it at: $HF_REPO_URL"
